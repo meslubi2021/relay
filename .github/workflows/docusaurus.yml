@@ -40,7 +40,7 @@ jobs:
           persist-credentials: false
 
       - name: Download Compiler Explorer
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4.1.7
         with:
           name: compiler-playground-package
           path: tmp/compiler-playground-package
