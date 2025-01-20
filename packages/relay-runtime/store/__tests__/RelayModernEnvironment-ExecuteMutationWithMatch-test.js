@@ -41,8 +41,12 @@ const {
 const RelayModernStore = require('../RelayModernStore');
 const RelayRecordSource = require('../RelayRecordSource');
 const nullthrows = require('nullthrows');
-const {disallowWarnings} = require('relay-test-utils-internal');
+const {
+  disallowWarnings,
+  injectPromisePolyfill__DEPRECATED,
+} = require('relay-test-utils-internal');
 
+injectPromisePolyfill__DEPRECATED();
 disallowWarnings();
 
 const commentID = '1';
@@ -652,9 +656,9 @@ describe.each(['RelayModernEnvironment', 'MultiActorEnvironment'])(
         it('optimistically creates @match fields and loads resources', () => {
           operationLoader.load.mockImplementationOnce(() => {
             return new Promise(resolve => {
-              setImmediate(() => {
+              setTimeout(() => {
                 resolve(markdownRendererNormalizationFragment);
-              });
+              }, 0);
             });
           });
           environment

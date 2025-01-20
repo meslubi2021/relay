@@ -41,7 +41,7 @@ impl UnwrapCustomDirectiveSelection {
     }
 }
 
-impl Transformer for UnwrapCustomDirectiveSelection {
+impl Transformer<'_> for UnwrapCustomDirectiveSelection {
     const NAME: &'static str = "UnwrapCustomDirectiveSelection";
     const VISIT_ARGUMENTS: bool = false;
     const VISIT_DIRECTIVES: bool = false;
@@ -62,8 +62,7 @@ impl Transformer for UnwrapCustomDirectiveSelection {
                                 .chain(iter::once(defer))
                                 .cloned()
                                 .collect(),
-                            fragment: frag_spread.fragment,
-                            arguments: frag_spread.arguments.clone(),
+                            ..frag_spread.as_ref().clone()
                         },
                     )));
                 }

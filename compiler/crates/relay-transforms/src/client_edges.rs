@@ -16,7 +16,9 @@ use common::NamedItem;
 use common::ObjectName;
 use common::WithLocation;
 use docblock_shared::HAS_OUTPUT_TYPE_ARGUMENT_NAME;
+use docblock_shared::LIVE_ARGUMENT_NAME;
 use docblock_shared::RELAY_RESOLVER_DIRECTIVE_NAME;
+use docblock_shared::RELAY_RESOLVER_MODEL_INSTANCE_FIELD;
 use graphql_ir::associated_data_impl;
 use graphql_ir::Argument;
 use graphql_ir::ConstantValue;
@@ -42,7 +44,9 @@ use intern::string_key::StringKeyMap;
 use intern::Lookup;
 use lazy_static::lazy_static;
 use relay_config::ProjectConfig;
+use relay_schema::definitions::ResolverType;
 use schema::DirectiveValue;
+use schema::ObjectID;
 use schema::Schema;
 use schema::Type;
 
@@ -79,9 +83,16 @@ pub enum ClientEdgeMetadataDirective {
     ClientObject {
         type_name: Option<ObjectName>,
         unique_id: u32,
+        model_resolvers: Vec<ClientEdgeModelResolver>,
     },
 }
 associated_data_impl!(ClientEdgeMetadataDirective);
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ClientEdgeModelResolver {
+    pub type_name: WithLocation<ObjectName>,
+    pub is_live: bool,
+}
 
 /// Metadata directive attached to generated queries
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -92,7 +103,7 @@ associated_data_impl!(ClientEdgeGeneratedQueryMetadataDirective);
 
 pub struct ClientEdgeMetadata<'a> {
     /// The field which defines the graph relationship (currently always a Resolver)
-    pub backing_field: Selection,
+    pub backing_field: &'a Selection,
     /// Models the client edge field and its selections
     pub linked_field: &'a LinkedField,
     /// Additional metadata about the client edge
@@ -121,15 +132,10 @@ impl<'a> ClientEdgeMetadata<'a> {
                 fragment.selections.len() == 2,
                 "Expected Client Edge inline fragment to have exactly two selections. This is a bug in the Relay compiler."
             );
-            let mut backing_field = fragment
-                .selections
-                .get(0)
-                .expect("Client Edge inline fragments have exactly two selections").clone();
 
-            let backing_field_directives = backing_field.directives().iter().filter(|directive|
-                directive.name.item != RequiredMetadataDirective::directive_name()
-            ).cloned().collect();
-            backing_field.set_directives(backing_field_directives);
+            let backing_field = fragment
+                .selections.first()
+                .expect("Client Edge inline fragments have exactly two selections");
 
             let linked_field = match fragment.selections.get(1) {
                 Some(Selection::LinkedField(linked_field)) => linked_field,
@@ -258,8 +264,7 @@ impl<'program, 'pc> ClientEdgesTransform<'program, 'pc> {
             selections,
         };
 
-        let mut transformer =
-            RefetchableFragment::new(self.program, &self.project_config.schema_config, false);
+        let mut transformer = RefetchableFragment::new(self.program, self.project_config, false);
 
         let refetchable_fragment = transformer
             .transform_refetch_fragment_with_refetchable_directive(
@@ -323,7 +328,7 @@ impl<'program, 'pc> ClientEdgesTransform<'program, 'pc> {
                 ValidationMessage::ClientEdgeUnsupportedDirective {
                     directive_name: directive.name.item,
                 },
-                directive.name.location,
+                directive.location,
             ));
         }
     }
@@ -341,7 +346,7 @@ impl<'program, 'pc> ClientEdgesTransform<'program, 'pc> {
         if let Some(directive) = waterfall_directive {
             self.errors.push(Diagnostic::error_with_data(
                 ValidationMessageWithData::RelayResolversUnexpectedWaterfall,
-                directive.name.location,
+                directive.location,
             ));
         }
 
@@ -370,26 +375,105 @@ impl<'program, 'pc> ClientEdgesTransform<'program, 'pc> {
                         field.alias_or_name_location(),
                     ));
                 }
+                self.get_client_object_for_abstract_type(
+                    implementing_objects.iter(),
+                    interface.name.item.0,
+                )
+            }
+            Type::Union(union) => {
+                let union = self.program.schema.union(union);
+                self.get_client_object_for_abstract_type(union.members.iter(), union.name.item.0)
+            }
+            Type::Object(object_id) => {
+                let type_name = self.program.schema.object(object_id).name.item;
+                let model_resolvers = self
+                    .get_client_edge_model_resolver_for_object(object_id)
+                    .map_or(vec![], |model_resolver| vec![model_resolver]);
                 Some(ClientEdgeMetadataDirective::ClientObject {
-                    type_name: None,
+                    type_name: Some(type_name),
+                    model_resolvers,
                     unique_id: self.get_key(),
                 })
             }
-            Type::Union(_) => {
-                self.errors.push(Diagnostic::error(
-                    ValidationMessage::ClientEdgeToClientUnion,
-                    field.alias_or_name_location(),
-                ));
-                None
-            }
-            Type::Object(object_id) => Some(ClientEdgeMetadataDirective::ClientObject {
-                type_name: Some(self.program.schema.object(object_id).name.item),
-                unique_id: self.get_key(),
-            }),
             _ => {
                 panic!("Expected a linked field to reference either an Object, Interface, or Union")
             }
         }
+    }
+
+    fn get_client_object_for_abstract_type<'a>(
+        &mut self,
+        members: impl Iterator<Item = &'a ObjectID>,
+        abstract_type_name: StringKey,
+    ) -> Option<ClientEdgeMetadataDirective> {
+        let mut model_resolvers: Vec<ClientEdgeModelResolver> = members
+            .filter_map(|object_id| {
+                let model_resolver = self.get_client_edge_model_resolver_for_object(*object_id);
+                model_resolver.or_else(|| {
+                    self.maybe_report_error_for_missing_model_resolver(
+                        object_id,
+                        abstract_type_name,
+                    );
+                    None
+                })
+            })
+            .collect();
+        model_resolvers.sort();
+        Some(ClientEdgeMetadataDirective::ClientObject {
+            type_name: None,
+            model_resolvers,
+            unique_id: self.get_key(),
+        })
+    }
+
+    fn maybe_report_error_for_missing_model_resolver(
+        &mut self,
+        object_id: &ObjectID,
+        abstract_type_name: StringKey,
+    ) {
+        let object = Type::Object(*object_id);
+        let schema = self.program.schema.as_ref();
+        if !object.is_weak_resolver_object(schema) && object.is_resolver_object(schema) {
+            let model_name = self.program.schema.object(*object_id).name;
+            self.errors.push(Diagnostic::error(
+                ValidationMessage::ClientEdgeImplementingObjectMissingModelResolver {
+                    name: abstract_type_name,
+                    type_name: model_name.item,
+                },
+                model_name.location,
+            ));
+        }
+    }
+
+    fn get_client_edge_model_resolver_for_object(
+        &mut self,
+        object_id: ObjectID,
+    ) -> Option<ClientEdgeModelResolver> {
+        let model = Type::Object(object_id);
+        let schema = self.program.schema.as_ref();
+        if !model.is_resolver_object(schema)
+            || model.is_weak_resolver_object(schema)
+            || !model.is_terse_resolver_object(schema)
+        {
+            return None;
+        }
+        let object = self.program.schema.object(object_id);
+        let model_field_id = self
+            .program
+            .schema
+            .named_field(model, *RELAY_RESOLVER_MODEL_INSTANCE_FIELD)?;
+        let model_field = self.program.schema.field(model_field_id);
+        let resolver_directive = model_field.directives.named(*RELAY_RESOLVER_DIRECTIVE_NAME);
+        let is_live = resolver_directive.map_or(false, |resolver_directive| {
+            resolver_directive
+                .arguments
+                .iter()
+                .any(|arg| arg.name.0 == LIVE_ARGUMENT_NAME.0)
+        });
+        Some(ClientEdgeModelResolver {
+            type_name: object.name,
+            is_live,
+        })
     }
 
     fn get_edge_to_server_object_metadata_directive(
@@ -454,7 +538,7 @@ impl<'program, 'pc> ClientEdgesTransform<'program, 'pc> {
             if let Some(directive) = waterfall_directive {
                 self.errors.push(Diagnostic::error_with_data(
                     ValidationMessageWithData::RelayResolversUnexpectedWaterfall,
-                    directive.name.location,
+                    directive.location,
                 ));
             }
             return self.default_transform_linked_field(field);
@@ -517,7 +601,20 @@ fn create_inline_fragment_for_client_edge(
     }
 
     let transformed_field = Arc::new(LinkedField {
+        selections: selections.clone(),
+        ..field.clone()
+    });
+
+    let backing_field_directives = field
+        .directives()
+        .iter()
+        .filter(|directive| directive.name.item != RequiredMetadataDirective::directive_name())
+        .cloned()
+        .collect();
+
+    let backing_field = Arc::new(LinkedField {
         selections,
+        directives: backing_field_directives,
         ..field.clone()
     });
 
@@ -525,14 +622,15 @@ fn create_inline_fragment_for_client_edge(
         type_condition: None,
         directives: inline_fragment_directives,
         selections: vec![
-            Selection::LinkedField(transformed_field.clone()),
-            Selection::LinkedField(transformed_field),
+            // NOTE: This creates 2^H selecitons where H is the depth of nested client edges
+            Selection::LinkedField(Arc::clone(&backing_field)),
+            Selection::LinkedField(Arc::clone(&transformed_field)),
         ],
         spread_location: Location::generated(),
     }
 }
 
-impl Transformer for ClientEdgesTransform<'_, '_> {
+impl Transformer<'_> for ClientEdgesTransform<'_, '_> {
     const NAME: &'static str = "ClientEdgesTransform";
     const VISIT_ARGUMENTS: bool = false;
     const VISIT_DIRECTIVES: bool = false;
@@ -595,7 +693,7 @@ impl Transformer for ClientEdgesTransform<'_, '_> {
         {
             self.errors.push(Diagnostic::error_with_data(
                 ValidationMessageWithData::RelayResolversUnexpectedWaterfall,
-                directive.name.location,
+                directive.location,
             ));
         }
         self.default_transform_scalar_field(field)
@@ -610,11 +708,12 @@ fn make_refetchable_directive(query_name: OperationDefinitionName) -> Directive 
             value: WithLocation::generated(Value::Constant(ConstantValue::String(query_name.0))),
         }],
         data: None,
+        location: Location::generated(),
     }
 }
 
 pub fn remove_client_edge_selections(program: &Program) -> DiagnosticsResult<Program> {
-    let mut transform = ClientEdgesCleanupTransform::default();
+    let mut transform = ClientEdgesCleanupTransform;
     let next_program = transform
         .transform_program(program)
         .replace_or_else(|| program.clone());
@@ -625,7 +724,7 @@ pub fn remove_client_edge_selections(program: &Program) -> DiagnosticsResult<Pro
 #[derive(Default)]
 struct ClientEdgesCleanupTransform;
 
-impl Transformer for ClientEdgesCleanupTransform {
+impl Transformer<'_> for ClientEdgesCleanupTransform {
     const NAME: &'static str = "ClientEdgesCleanupTransform";
     const VISIT_ARGUMENTS: bool = false;
     const VISIT_DIRECTIVES: bool = false;
@@ -636,7 +735,7 @@ impl Transformer for ClientEdgesCleanupTransform {
                 let new_selection = metadata.backing_field;
 
                 Transformed::Replace(
-                    self.transform_selection(&new_selection)
+                    self.transform_selection(new_selection)
                         .unwrap_or_else(|| new_selection.clone()),
                 )
             }

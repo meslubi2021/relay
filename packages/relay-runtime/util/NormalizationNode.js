@@ -11,7 +11,7 @@
 
 'use strict';
 
-import type {ResolverModule} from './ReaderNode';
+import type {ResolverFunction, ResolverModule} from './ReaderNode';
 import type {ConcreteRequest} from './RelayConcreteNode';
 import type {JSResourceReference} from 'JSResourceReference';
 
@@ -27,6 +27,7 @@ export type NormalizationOperation = {
   +clientAbstractTypes?: {
     +[string]: $ReadOnlyArray<string>,
   },
+  +use_exec_time_resolvers?: boolean,
 };
 
 export type NormalizationHandle =
@@ -165,35 +166,52 @@ export type NormalizationScalarField = {
   +storageKey?: ?string,
 };
 
-export type ResolverModuleReference = {
+export type ResolverReference = {
   +fieldType: string,
   +resolverFunctionName: string,
 };
 
+export type ResolverInfo = {
+  +resolverFunction: ResolverFunction,
+  +rootFragment?: ?NormalizationSplitOperation,
+};
+
+type ResolverData =
+  | {+resolverModule?: ResolverModule}
+  | {+resolverReference?: ResolverReference}
+  | {+resolverInfo?: ResolverInfo};
+
 export type NormalizationResolverField = {
   +kind: 'RelayResolver',
   +name: string,
-  +args: ?$ReadOnlyArray<NormalizationArgument>,
+  +args?: ?$ReadOnlyArray<NormalizationArgument>,
   +fragment?: ?NormalizationInlineFragment,
-  +storageKey: ?string,
+  +storageKey?: ?string,
   +isOutputType: boolean,
-  +resolverModule?: ResolverModule | ResolverModuleReference,
+  ...ResolverData,
 };
 
 export type NormalizationLiveResolverField = {
   +kind: 'RelayLiveResolver',
   +name: string,
-  +args: ?$ReadOnlyArray<NormalizationArgument>,
+  +args?: ?$ReadOnlyArray<NormalizationArgument>,
   +fragment?: ?NormalizationInlineFragment,
-  +storageKey: ?string,
+  +storageKey?: ?string,
   +isOutputType: boolean,
-  +resolverModule?: ResolverModule | ResolverModuleReference,
+  ...ResolverData,
+};
+
+export type NormalizationModelResolvers = {
+  [string]: {
+    +resolverModule: ResolverModule,
+  },
 };
 
 export type NormalizationClientEdgeToClientObject = {
   +kind: 'ClientEdgeToClientObject',
   +linkedField: NormalizationLinkedField,
   +backingField: NormalizationResolverField | NormalizationLiveResolverField,
+  +modelResolvers?: NormalizationModelResolvers | null,
 };
 
 export type NormalizationClientComponent = {
@@ -226,7 +244,7 @@ export type NormalizationSplitOperation = {
   +argumentDefinitions?: $ReadOnlyArray<NormalizationLocalArgumentDefinition>,
   +kind: 'SplitOperation',
   +name: string,
-  +metadata: ?{+[key: string]: mixed, ...},
+  +metadata?: ?{+[key: string]: mixed, ...},
   +selections: $ReadOnlyArray<NormalizationSelection>,
 };
 

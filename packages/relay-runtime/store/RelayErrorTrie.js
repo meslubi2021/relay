@@ -13,16 +13,20 @@
 
 import type {PayloadError} from '../network/RelayNetworkTypes';
 
-const RelayFeatureFlags = require('../util/RelayFeatureFlags');
-
+// $FlowFixMe[recursive-definition]
 const SELF: Self = Symbol('$SELF');
 
 export opaque type Self = typeof SELF;
 
-export type RelayFieldError = $ReadOnly<{
-  message: string,
+export type TRelayFieldErrorForDisplay = $ReadOnly<{
   path?: $ReadOnlyArray<string | number>,
   severity?: 'CRITICAL' | 'ERROR' | 'WARNING',
+}>;
+
+// We display a subset of the TRelayFieldError to the user. Removing the message by default.
+export type TRelayFieldError = $ReadOnly<{
+  ...TRelayFieldErrorForDisplay,
+  message: string,
 }>;
 
 /**
@@ -41,7 +45,7 @@ export type RelayFieldError = $ReadOnly<{
  */
 export opaque type RelayErrorTrie = Map<
   string | number | Self,
-  RelayErrorTrie | Array<Omit<RelayFieldError, 'path'>>,
+  RelayErrorTrie | Array<Omit<TRelayFieldError, 'path'>>,
 >;
 
 function buildErrorTrie(
@@ -50,9 +54,7 @@ function buildErrorTrie(
   if (errors == null) {
     return null;
   }
-  if (!RelayFeatureFlags.ENABLE_FIELD_ERROR_HANDLING) {
-    return null;
-  }
+
   const trie: $NonMaybeType<RelayErrorTrie> = new Map();
   // eslint-disable-next-line no-unused-vars
   ERRORS: for (const {path, locations: _, ...error} of errors) {
@@ -98,7 +100,7 @@ function buildErrorTrie(
 function getErrorsByKey(
   trie: RelayErrorTrie,
   key: string | number,
-): $ReadOnlyArray<RelayFieldError> | null {
+): $ReadOnlyArray<TRelayFieldError> | null {
   const value = trie.get(key);
   if (value == null) {
     return null;

@@ -28,7 +28,7 @@ fn parse_and_resolve_completion_items(
     program: Option<Program>,
 ) -> Option<Vec<CompletionItem>> {
     let pos = source.find('|').unwrap() - 1;
-    let next_source = source.replace("|", "");
+    let next_source = source.replace('|', "");
     let document = parse_executable_with_error_recovery(
         &next_source,
         SourceLocationKey::standalone("/test/file"),
@@ -264,11 +264,11 @@ fn whitespace_in_union() {
                 fragment UnionFragment on CommentBody {
                   __typename
                 }
-    
+
                 fragment UnionVariantFragment on PlainCommentBody {
                   __typename
                 }
-    
+
                 fragment UnrelatedFragment on Task {
                   __typename
                 }
@@ -409,12 +409,14 @@ fn directive() {
     assert_labels(
         items.unwrap(),
         vec![
+            "credentials",
             "prependEdge",
             "deleteRecord",
             "appendNode",
             "deleteEdge",
             "__clientField",
             "appendEdge",
+            "catch",
             "required",
             "stream_connection",
             "match",
@@ -427,6 +429,7 @@ fn directive() {
             "skip",
             "fb_actor_change",
             "waterfall",
+            "live",
         ],
     );
 }
@@ -446,12 +449,14 @@ fn directive_on_scalar_field() {
     assert_labels(
         items.unwrap(),
         vec![
+            "credentials",
             "prependEdge",
             "deleteRecord",
             "appendNode",
             "deleteEdge",
             "__clientField",
             "appendEdge",
+            "catch",
             "required",
             "stream_connection",
             "match",
@@ -464,6 +469,7 @@ fn directive_on_scalar_field() {
             "skip",
             "fb_actor_change",
             "waterfall",
+            "live",
         ],
     );
 }
@@ -732,12 +738,14 @@ fn empty_directive() {
     assert_labels(
         items.unwrap(),
         vec![
+            "credentials",
             "prependEdge",
             "deleteRecord",
             "appendNode",
             "deleteEdge",
             "__clientField",
             "appendEdge",
+            "catch",
             "required",
             "stream_connection",
             "match",
@@ -750,6 +758,7 @@ fn empty_directive() {
             "skip",
             "fb_actor_change",
             "waterfall",
+            "live",
         ],
     );
 }

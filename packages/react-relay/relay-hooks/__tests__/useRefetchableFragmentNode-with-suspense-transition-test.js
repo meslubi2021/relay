@@ -14,7 +14,7 @@ import type {RelayMockEnvironment} from '../../../relay-test-utils/RelayModernMo
 import type {OperationDescriptor, Variables} from 'relay-runtime';
 import type {Disposable} from 'relay-runtime/util/RelayRuntimeTypes';
 
-const useRefetchableFragmentNodeOriginal = require('../useRefetchableFragmentNode');
+const useRefetchableFragmentNodeOriginal = require('../legacy/useRefetchableFragmentNode');
 const React = require('react');
 const ReactRelayContext = require('react-relay/ReactRelayContext');
 const TestRenderer = require('react-test-renderer');
@@ -27,7 +27,12 @@ const {
   graphql,
 } = require('relay-runtime');
 const {createMockEnvironment} = require('relay-test-utils');
+const {
+  injectPromisePolyfill__DEPRECATED,
+} = require('relay-test-utils-internal');
 const Scheduler = require('scheduler');
+
+injectPromisePolyfill__DEPRECATED();
 
 const {useLayoutEffect, useTransition, useMemo, useState} = React;
 

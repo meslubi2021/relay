@@ -47,7 +47,7 @@ where
         let extension_location = SourceLocationKey::embedded(fixture.file_name, 1);
         sources_map.insert(extension_location, extensions_text.to_string());
 
-        get_test_schema_with_located_extensions(*extensions_text, extension_location)
+        get_test_schema_with_located_extensions(extensions_text, extension_location)
     } else {
         get_test_schema()
     };
@@ -60,6 +60,7 @@ where
             fragment_variables_semantic: FragmentVariablesSemantic::PassedValue,
             relay_mode: Some(RelayMode),
             default_anonymous_operation_name: None,
+            allow_custom_scalar_literals: true, // for compatibility
         },
     );
     let ir = ir_result.map_err(|diagnostics| {

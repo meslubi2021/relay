@@ -38,6 +38,7 @@ import type {
   SelectorStoreUpdater,
   Store,
   StreamPlaceholder,
+  TaskPriority,
   TaskScheduler,
 } from '../store/RelayStoreTypes';
 import type {
@@ -56,8 +57,8 @@ const generateID = require('../util/generateID');
 const getOperation = require('../util/getOperation');
 const RelayError = require('../util/RelayError');
 const RelayFeatureFlags = require('../util/RelayFeatureFlags');
-const stableCopy = require('../util/stableCopy');
-const withDuration = require('../util/withDuration');
+const {stableCopy} = require('../util/stableCopy');
+const withStartAndDuration = require('../util/withStartAndDuration');
 const {generateClientID, generateUniqueClientID} = require('./ClientID');
 const {getLocalVariables} = require('./RelayConcreteVariables');
 const RelayModernRecord = require('./RelayModernRecord');
@@ -211,6 +212,19 @@ class Executor<TMutation: MutationParameters> {
     this._normalizeResponse = normalizeResponse;
 
     const id = this._nextSubscriptionId++;
+
+    if (
+      RelayFeatureFlags.PROCESS_OPTIMISTIC_UPDATE_BEFORE_SUBSCRIPTION &&
+      optimisticConfig != null
+    ) {
+      this._processOptimisticResponse(
+        optimisticConfig.response != null
+          ? {data: optimisticConfig.response}
+          : null,
+        optimisticConfig.updater,
+        false,
+      );
+    }
     source.subscribe({
       complete: () => this._complete(id),
       error: error => this._error(error),
@@ -231,9 +245,18 @@ class Executor<TMutation: MutationParameters> {
           cacheConfig: this._operation.request.cacheConfig ?? {},
         });
       },
+      unsubscribe: () => {
+        this._log({
+          name: 'execute.unsubscribe',
+          executeId: this._executeId,
+        });
+      },
     });
 
-    if (optimisticConfig != null) {
+    if (
+      !RelayFeatureFlags.PROCESS_OPTIMISTIC_UPDATE_BEFORE_SUBSCRIPTION &&
+      optimisticConfig != null
+    ) {
       this._processOptimisticResponse(
         optimisticConfig.response != null
           ? {data: optimisticConfig.response}
@@ -305,7 +328,7 @@ class Executor<TMutation: MutationParameters> {
     );
   }
 
-  _schedule(task: () => void): void {
+  _schedule(task: () => void, priority: TaskPriority): void {
     const scheduler = this._scheduler;
     if (scheduler != null) {
       const id = this._nextSubscriptionId++;
@@ -317,7 +340,7 @@ class Executor<TMutation: MutationParameters> {
           } catch (error) {
             sink.error(error);
           }
-        });
+        }, priority);
         return () => scheduler.cancel(cancellationToken);
       }).subscribe({
         complete: () => this._complete(id),
@@ -358,18 +381,23 @@ class Executor<TMutation: MutationParameters> {
 
   // Handle a raw GraphQL response.
   _next(_id: number, response: GraphQLResponse): void {
+    const priority = this._state === 'loading_incremental' ? 'low' : 'default';
     this._schedule(() => {
-      const [duration] = withDuration(() => {
-        this._handleNext(response);
-        this._maybeCompleteSubscriptionOperationTracking();
-      });
       this._log({
-        name: 'execute.next',
+        name: 'execute.next.start',
         executeId: this._executeId,
         response,
-        duration,
+        operation: this._operation,
       });
-    });
+      this._handleNext(response);
+      this._maybeCompleteSubscriptionOperationTracking();
+      this._log({
+        name: 'execute.next.end',
+        executeId: this._executeId,
+        response,
+        operation: this._operation,
+      });
+    }, priority);
   }
 
   _handleErrorResponse(
@@ -753,6 +781,10 @@ class Executor<TMutation: MutationParameters> {
   _processResponses(
     responses: $ReadOnlyArray<GraphQLResponseWithData>,
   ): $ReadOnlyArray<RelayResponsePayload> {
+    this._log({
+      name: 'execute.normalize.start',
+      operation: this._operation,
+    });
     if (this._optimisticUpdates !== null) {
       this._optimisticUpdates.forEach(update => {
         this._getPublishQueueAndSaveActor().revertUpdate(update);
@@ -781,7 +813,10 @@ class Executor<TMutation: MutationParameters> {
         relayPayload,
         this._updater,
       );
-
+      this._log({
+        name: 'execute.normalize.end',
+        operation: this._operation,
+      });
       return relayPayload;
     });
   }
@@ -925,7 +960,7 @@ class Executor<TMutation: MutationParameters> {
                       const shouldScheduleAsyncStoreUpdate =
                         batchAsyncModuleUpdatesFN != null &&
                         this._pendingModulePayloadsCount > 1;
-                      const [duration] = withDuration(() => {
+                      const [_, duration] = withStartAndDuration(() => {
                         this._handleFollowupPayload(followupPayload, operation);
                         // OK: always have to run after an async module import resolves
                         if (shouldScheduleAsyncStoreUpdate) {

@@ -86,7 +86,7 @@ pub struct SkipUnreachableNodeTransform<'s> {
     defer_stream_interface: DeferStreamInterface,
 }
 
-impl<'s> Transformer for SkipUnreachableNodeTransform<'s> {
+impl<'s> Transformer<'_> for SkipUnreachableNodeTransform<'s> {
     const NAME: &'static str = "SkipUnreachableNodeTransform";
     const VISIT_ARGUMENTS: bool = false;
     const VISIT_DIRECTIVES: bool = false;
@@ -361,7 +361,18 @@ impl<'s> SkipUnreachableNodeTransform<'s> {
     }
 }
 
-#[derive(Clone, Debug, Error, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(
+    Clone,
+    Debug,
+    Error,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    serde::Serialize
+)]
+#[serde(tag = "type")]
 enum ValidationMessage {
     #[error(
         "After applying transforms to the {document} `{name}` selections of \
